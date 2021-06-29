@@ -72,9 +72,18 @@ public class SortOperator {
      */
     public Run sortRun(Run run) {
         // TODO(proj3_part1): implement
+        List<Record> l = new ArrayList<>();
+        Iterator<Record> iter = run.iterator();
+        while (iter.hasNext()) {
+            l.add(iter.next());
+        }
 
-        return null;
+        Collections.sort(l, this.comparator);
+        Run newRun = createRun();
+        newRun.addRecords(l);
+        return newRun;
     }
+
 
     /**
      * Given a list of sorted runs, returns a NEW run that is the result
@@ -86,8 +95,43 @@ public class SortOperator {
      */
     public Run mergeSortedRuns(List<Run> runs) {
         // TODO(proj3_part1): implement
+        Comparator<Pair<Record, Integer>> pairComparator = new RecordPairComparator();
+        PriorityQueue<Pair<Record, Integer>> pq = new PriorityQueue<>(pairComparator);
 
-        return null;
+        List<Iterator<Record>> iterStorer = new ArrayList<>();
+
+        for (int i = 0; i < runs.size(); i++) {  // store all the iterators
+            iterStorer.add(runs.get(i).iterator());
+        }
+
+        for (int i = 0; i < runs.size(); i++) {   // load the smallest value from each sorted run
+            Iterator<Record> recordIter = iterStorer.get(i);
+            if (recordIter.hasNext()) {
+                Record r = recordIter.next();
+                Pair<Record, Integer> p = new Pair<>(r, i);
+                pq.add(p);
+            }
+        }
+
+
+        Run resultRun = createRun();
+
+        while (!pq.isEmpty()) {
+            Pair<Record, Integer> smallestOfAll = pq.remove();
+            resultRun.addRecord(smallestOfAll.getFirst().getValues());
+            int currentRunNum = smallestOfAll.getSecond();
+            Iterator<Record> currentRunIter = iterStorer.get(currentRunNum);  // currentRunIter is the iterator for the run that has the smallestOfALl item
+            // need to fetch the next smallest item from that run and add to pq
+            if (currentRunIter.hasNext()) {
+                Record secondSmallestInCurrentRun = currentRunIter.next();
+                pq.add(new Pair<>(secondSmallestInCurrentRun, currentRunNum));
+            }
+
+        }
+
+        return resultRun;
+
+
     }
 
     /**
@@ -100,7 +144,23 @@ public class SortOperator {
     public List<Run> mergePass(List<Run> runs) {
         // TODO(proj3_part1): implement
 
-        return Collections.emptyList();
+        int n = runs.size();
+        int numMerges = n / (this.numBuffers - 1);
+
+        List<Run> resultRuns = new ArrayList<>();
+
+        for (int i = 0; i < numMerges; i++) {
+            List<Run> mergeRange = runs.subList(i * (this.numBuffers - 1), (i + 1) * (this.numBuffers - 1));
+            resultRuns.add(mergeSortedRuns(mergeRange));
+        }
+
+        //tail case
+        if (numMerges < (double) n / (this.numBuffers - 1)) { // if numMerges is floored -- which means there are left over pages
+            List<Run> lastMergeRange = runs.subList(numMerges * (this.numBuffers - 1), n);
+            resultRuns.add(mergeSortedRuns(lastMergeRange));
+        }
+
+        return resultRuns;
     }
 
     /**
@@ -111,8 +171,34 @@ public class SortOperator {
     public String sort() {
         // TODO(proj3_part1): implement
 
-        return this.tableName; // TODO(proj3_part1): replace this!
+        List<Run> resultRuns = new ArrayList<>();
+        BacktrackingIterator<Page> iter = this.transaction.getPageIterator(this.tableName);
+        // performs in-place sort
+        while (iter.hasNext()) {
+            // create iterator over B pages
+            BacktrackingIterator<Record> runsIterator = this.transaction.getBlockIterator(this.tableName, iter, this.numBuffers);
+            // create a size B run with the above iterator, and sort the run
+            Run oneRun = createRunFromIterator(runsIterator);
+            Run oneSortedRun = sortRun(oneRun);
+            resultRuns.add(oneSortedRun);
+        }  // now resultRuns will contain all the sorted runs
+
+        // proceed to merge all the sorted runs in x # of pass
+        while (resultRuns.size() != 1) {
+            resultRuns = mergePass(resultRuns);
+        }
+        return resultRuns.get(0).tableName(); // TODO(proj3_part1): replace this!
     }
+
+
+
+
+
+
+
+
+
+
 
     public Iterator<Record> iterator() {
         if (sortedTableName == null) {

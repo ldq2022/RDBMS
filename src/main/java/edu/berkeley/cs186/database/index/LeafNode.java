@@ -141,41 +141,153 @@ class LeafNode extends BPlusNode {
     @Override
     public LeafNode get(DataBox key) {
         // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.getLeftmostLeaf.
     @Override
     public LeafNode getLeftmostLeaf() {
         // TODO(proj2): implement
-
-        return null;
+        return this;
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
+
         // TODO(proj2): implement
 
-        return Optional.empty();
+        if (keys.contains(key)) {
+            throw new BPlusTreeException("Cannot insert a duplicate key to our B+ tree");
+        }
+
+        int d = metadata.getOrder();
+        int position = InnerNode.numLessThanEqual(key, keys);
+
+        keys.add(position, key);
+        rids.add(position, rid);
+
+        if (keys.size() < d*2 + 1) {  // indicates there is one space left for insert - we don't have overflow
+
+            sync();    // call this because we modify the tree
+            return Optional.empty();
+        }
+
+        else {  // indicates overflow
+
+            List<DataBox> newkeys = keys.subList(d, 2*d + 1);
+            List<RecordId> newrids = rids.subList(d, 2*d + 1);
+            List<DataBox> oldkeys = keys.subList(0, d);
+            List<RecordId> oldrids = rids.subList(0, d);
+
+
+            LeafNode newleafnode = new LeafNode(this.metadata, this.bufferManager, newkeys, newrids, this.rightSibling, this.treeContext);
+            // ^^ java pass by value
+            // so even though this.rightSibling
+            // will be changed later it
+            // will not affect here.
+
+
+
+
+            long right_node_page_num = newleafnode.getPage().getPageNum();
+            DataBox split_key = newkeys.get(0);
+
+            // update k, r, rightsibling of the current leafnode
+            this.keys = oldkeys;
+            this.rids = oldrids;
+            this.rightSibling = Optional.of(right_node_page_num);
+
+
+            sync();
+            return Optional.of(new Pair<>(split_key, right_node_page_num));
+
+        }
+
+
+
+
+
+
+
     }
 
+
+
+
+
+    //
+    //
+    //
+    //
+    //
     // See BPlusNode.bulkLoad.
+    //
+    /**
+     * n.bulkLoad(data, fillFactor) bulk loads pairs of (k, r) from data into
+     * the tree with the given fill factor.
+     *
+     * This method is very similar to n.put, with a couple of differences:
+     *
+     * 1. Leaf nodes do not fill up to 2*d+1 and split, but rather, fill up to
+     * be 1 record more than fillFactor full, then "splits" by creating a right
+     * sibling that contains just one record (leaving the original node with
+     * the desired fill factor).
+     *
+     * 2. Inner nodes should repeatedly try to bulk load the rightmost child
+     * until either the inner node is full (in which case it should split)
+     * or there is no more data.
+     *
+     * fillFactor should ONLY be used for determining how full leaf nodes are
+     * (not inner nodes), and calculations should round up, i.e. with d=5
+     * and fillFactor=0.75, leaf nodes should be 8/10 full.
+     */
     @Override
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        int d = metadata.getOrder();
+        int fillLimit = (int) Math.ceil(d * 2 * fillFactor);
+        while (keys.size() < fillLimit && data.hasNext()) {
+            Pair<DataBox, RecordId> pair = data.next();
+            keys.add(pair.getFirst());
+            rids.add(pair.getSecond());
+        }
 
-        return Optional.empty();
+        if (!data.hasNext()) { // no overflow
+            sync();
+            return Optional.empty();
+        }
+        else { // overflow
+            List<DataBox> newkeys = new ArrayList<>();
+            List<RecordId> newrids = new ArrayList<>();
+            Pair<DataBox, RecordId> pair = data.next();
+            newkeys.add(pair.getFirst());
+            newrids.add(pair.getSecond());
+            LeafNode newleafnode = new LeafNode(metadata, bufferManager, newkeys, newrids, Optional.empty(), treeContext);
+            long pagenum = newleafnode.getPage().getPageNum();   // get the address (or pointer) of `newleafnode`
+            this.rightSibling =  Optional.of(pagenum);
+            sync();
+            return Optional.of(new Pair<>(pair.getFirst(), pagenum));   // return optional.of (split key and rid)
+        }
+
+
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
+        if (keys.contains(key)) {
+            rids.remove(keys.indexOf(key));
+            keys.remove(key);
+        }
+        sync();
         return;
+
+
+
+
     }
 
     // Iterators /////////////////////////////////////////////////////////////////
@@ -323,7 +435,7 @@ class LeafNode extends BPlusNode {
         //   b. the page id (8 bytes) of our right sibling (or -1 if we don't have
         //      a right sibling),
         //   c. the number (4 bytes) of (key, rid) pairs this leaf node contains,
-        //      and
+        //
         //   d. the (key, rid) pairs themselves.
         //
         // For example, the following bytes:
@@ -335,18 +447,20 @@ class LeafNode extends BPlusNode {
         //     a               b                   c                         d
         //
         // represent a leaf node with sibling on page 4 and a single (key, rid)
-        // pair with key 3 and page id (3, 1).
+        // pair with key 3 and (rid) page id (3, 1).
 
         // All sizes are in bytes.
-        int isLeafSize = 1;
-        int siblingSize = Long.BYTES;
-        int lenSize = Integer.BYTES;
+        int isLeafSize = 1;   // size of a
+        int siblingSize = Long.BYTES;   // size of b
+        int lenSize = Integer.BYTES;     // size of c
         int keySize = metadata.getKeySchema().getSizeInBytes();
         int ridSize = RecordId.getSizeInBytes();
-        int entriesSize = (keySize + ridSize) * keys.size();
+        int entriesSize = (keySize + ridSize) * keys.size();   // size of d = (key's size + rid's size) * number of (key, rid) pairs
+                                                               // keys.size() is just the number of (key, rid) pairs
         int size = isLeafSize + siblingSize + lenSize + entriesSize;
 
-        ByteBuffer buf = ByteBuffer.allocate(size);
+
+        ByteBuffer buf = ByteBuffer.allocate(size);       // allocate size of a leaf node
         buf.put((byte) 1);
         buf.putLong(rightSibling.orElse(-1L));
         buf.putInt(keys.size());
@@ -364,7 +478,49 @@ class LeafNode extends BPlusNode {
                                      LockContext treeContext, long pageNum) {
         // TODO(proj2): implement
 
-        return null;
+        Page page = bufferManager.fetchPage(treeContext, pageNum, false);
+        Buffer buf = page.getBuffer();
+
+        assert (buf.get() == (byte) 1);   // a
+
+        List<DataBox> keys = new ArrayList<>();
+        List<RecordId> rids = new ArrayList<>();
+
+
+        // create rightSibling:
+        // If this leaf is the rightmost leaf, then rightSibling is Optional.empty().
+        // Otherwise, rightSibling is Optional.of(n) where n is the page number of
+        // this leaf's right sibling.
+        long l = buf.getLong();    // b
+        Optional<Long> rightSibling;
+        if (l == -1) {
+            rightSibling = Optional.empty();
+        } else {
+            rightSibling = Optional.of(l);
+        }
+
+
+        int n = buf.getInt();   // c
+        for (int i = 0; i < n; ++i) {
+            keys.add(DataBox.fromBytes(buf, metadata.getKeySchema()));
+            rids.add(RecordId.fromBytes(buf));
+        }
+
+
+        //return new LeafNode(metadata, bufferManager, keys, rids, rightSibling, treeContext);
+        return new LeafNode(metadata, bufferManager, page, keys, rids, rightSibling, treeContext);
+
+
+
+
+
+
+
+
+
+
+
+
     }
 
     // Builtins //////////////////////////////////////////////////////////////////

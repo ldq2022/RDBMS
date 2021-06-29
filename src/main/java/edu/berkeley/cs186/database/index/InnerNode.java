@@ -77,10 +77,12 @@ class InnerNode extends BPlusNode {
     // Core API //////////////////////////////////////////////////////////////////
     // See BPlusNode.get.
     @Override
-    public LeafNode get(DataBox key) {
+    public LeafNode get(DataBox key) {  // this function must iterate through the tree until it reaches the bottom which is a leafnode
         // TODO(proj2): implement
-
-        return null;
+        int pointer = numLessThanEqual(key, keys);
+        // child which this pointer points to may be a innernode or a leafnode
+        BPlusNode child = this.getChild(pointer);
+        return child.get(key); // recursive call until child becomes a leafnode (when child == leafnode, return self)
     }
 
     // See BPlusNode.getLeftmostLeaf.
@@ -88,16 +90,70 @@ class InnerNode extends BPlusNode {
     public LeafNode getLeftmostLeaf() {
         assert(children.size() > 0);
         // TODO(proj2): implement
-
-        return null;
+        BPlusNode child = this.getChild(0);
+        return child.getLeftmostLeaf();
     }
 
     // See BPlusNode.put.
     @Override
     public Optional<Pair<DataBox, Long>> put(DataBox key, RecordId rid) {
-        // TODO(proj2): implement
 
-        return Optional.empty();
+        // TODO(proj2): implement
+        int d = metadata.getOrder();
+        int pointer = InnerNode.numLessThanEqual(key, keys);
+        BPlusNode child = this.getChild(pointer);
+        Optional<Pair<DataBox, Long>> putCase = child.put(key, rid);  // recursive call to find the result of LeafNode.put:
+                                                                         // Optional.empty() will be returned if case 1,
+                                                                         // will be (split_key, right_node_page_num) if case 2
+        if (putCase.isPresent() == false) {
+            // Optional.empty() is returned. It's case 1!
+            // there is no overflow
+            sync();
+            return Optional.empty();
+        }
+
+        else { // case 2. (split_key, right_node_page_num) is returned
+            // then that means we need to add this split_key entry, i.e. "middle entry", to the CURRENT INNERNODE
+            // this basically ensures all levels of innernode will have correct, updated entry after rebalancing
+            // except maybe the root node which needs to be dealt with later
+            keys.add(pointer, putCase.get().getFirst());
+            children.add(pointer + 1, putCase.get().getSecond());
+
+
+            if (keys.size() <= d*2) { // if no overflow
+                sync();
+                return Optional.empty();
+            }
+
+            else {  // if overflow
+
+                List<DataBox> newkeys = keys.subList(d + 1, 2*d + 1);
+                List<Long> newchildren = children.subList(d + 1, 2*d + 2);   // d + 1 because middle key is "pushed up" not "copied up" !!!!!!!!!!!!!!!!!!!!
+                List<DataBox> oldkeys = keys.subList(0, d);
+                List<Long> oldchildren = children.subList(0, d + 1);
+                DataBox split_key = keys.get(d);
+
+                InnerNode newinnernode = new InnerNode(this.metadata, this.bufferManager, newkeys, newchildren, this.treeContext);
+
+                long right_node_page_num = newinnernode.getPage().getPageNum();
+
+
+                this.keys = oldkeys;
+                this.children = oldchildren;
+
+                sync();
+                return Optional.of(new Pair<>(split_key, right_node_page_num));
+
+
+            }
+
+
+
+
+        }
+
+
+
     }
 
     // See BPlusNode.bulkLoad.
@@ -105,16 +161,62 @@ class InnerNode extends BPlusNode {
     public Optional<Pair<DataBox, Long>> bulkLoad(Iterator<Pair<DataBox, RecordId>> data,
             float fillFactor) {
         // TODO(proj2): implement
+        int d = metadata.getOrder();
+        int fillLimit = (int) Math.ceil(d * 2 * fillFactor);
 
-        return Optional.empty();
+
+
+
+        while ((keys.size() <= d*2) && data.hasNext()) {  // Note that fillFactor is only for leafnode; innernode only splits when it is full
+            BPlusNode rightMostChild = this.getChild(children.size() - 1); // get the right most child because that is where we are going to bulkload
+            Optional<Pair<DataBox, Long>> leafNodeBulkLoadResult = rightMostChild.bulkLoad(data, fillFactor);
+
+            if (!leafNodeBulkLoadResult.isPresent()) {  // which means there is no overflow
+                // done
+                break;
+            } else {
+                Pair<DataBox, Long> newpair = leafNodeBulkLoadResult.get();  // this is the node that got 'pushed up' from below
+                // keeps filling the current innernode UNTIL WE REACH THE FILLLIMIT AND END THE WHILE LOOP
+                // keeps filling the current innernode UNTIL WE REACH THE FILLLIMIT AND END THE WHILE LOOP
+                // keeps filling the current innernode UNTIL WE REACH THE FILLLIMIT AND END THE WHILE LOOP
+                keys.add(newpair.getFirst());
+                // keeps filling the current innernode UNTIL WE REACH THE FILLLIMIT AND END THE WHILE LOOP
+                // keeps filling the current innernode UNTIL WE REACH THE FILLLIMIT AND END THE WHILE LOOP
+                // keeps filling the current innernode UNTIL WE REACH THE FILLLIMIT AND END THE WHILE LOOP
+                children.add(newpair.getSecond());
+            }
+
+        }
+
+
+        // once the while loop ends, and our inner node is not overfilled/overflowed, we are done
+        if (keys.size() <= d*2) {
+            sync();
+            return Optional.empty();
+        }
+        // once the while loop ends, but we still have data.next(), we reach the filllimit and creates a new right inner node
+        List<DataBox> newkeys = keys.subList(d, d*2 + 1);
+        List<Long> newchildren = children.subList(d, d*2 + 1);
+        keys = keys.subList(0, d);
+        children = children.subList(0, d);
+        InnerNode newinnernode = new InnerNode(metadata, bufferManager, newkeys, newchildren, treeContext);
+        DataBox splitkey = newkeys.get(0);
+        long pagenum = newinnernode.getPage().getPageNum();
+
+        sync();
+        return Optional.of(new Pair<>(splitkey, pagenum));
+
+
+
     }
 
     // See BPlusNode.remove.
     @Override
     public void remove(DataBox key) {
         // TODO(proj2): implement
-
-        return;
+        int pointer = numLessThanEqual(key, keys);
+        BPlusNode child = this.getChild(pointer);
+        child.remove(key);
     }
 
     // Helpers ///////////////////////////////////////////////////////////////////
@@ -123,12 +225,12 @@ class InnerNode extends BPlusNode {
         return page;
     }
 
-    private BPlusNode getChild(int i) {
+    private BPlusNode getChild(int i) {   // sort of like de-referencing a pointer ?
         long pageNum = children.get(i);
         return BPlusNode.fromBytes(metadata, bufferManager, treeContext, pageNum);
     }
 
-    private void sync() {
+    private void sync() {   // what is this for ???
         page.pin();
         try {
             Buffer b = page.getBuffer();
@@ -333,7 +435,7 @@ class InnerNode extends BPlusNode {
     }
 
     /**
-     * Loads an inner node from page `pageNum`.
+     * Loads an inner node from page `pageNum`.     ---- `pageNum` is just like a pointer, it points to the page where the child inner node lives
      */
     public static InnerNode fromBytes(BPlusTreeMetadata metadata,
                                       BufferManager bufferManager, LockContext treeContext, long pageNum) {

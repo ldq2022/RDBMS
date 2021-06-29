@@ -38,7 +38,7 @@ public class TestOptimization2 {
     // 1 second max per method tested.
     @Rule
     public TestRule globalTimeout = new DisableOnDebug(Timeout.millis((long) (
-                1000 * TimeoutScaling.factor)));
+                4000 * TimeoutScaling.factor)));
 
     @Before
     public void beforeEach() throws Exception {

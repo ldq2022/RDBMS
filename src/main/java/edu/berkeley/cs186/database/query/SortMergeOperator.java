@@ -55,10 +55,112 @@ class SortMergeOperator extends JoinOperator {
         private Record rightRecord;
         private boolean marked;
 
-        private SortMergeIterator() {
+        private SortMergeIterator() {  // constructor
             super();
             // TODO(proj3_part1): implement
+
+            SortOperator left = new SortOperator(SortMergeOperator.this.getTransaction(), this.getLeftTableName(), new LeftRecordComparator());
+            SortOperator right = new SortOperator(SortMergeOperator.this.getTransaction(), this.getRightTableName(), new RightRecordComparator());
+
+
+            this.leftIterator = (BacktrackingIterator<Record>) left.iterator();
+            this.rightIterator = (BacktrackingIterator<Record>) right.iterator();
+
+            this.nextRecord = null;
+
+            this.leftRecord = leftIterator.hasNext() ? leftIterator.next() : null;
+            this.rightRecord = rightIterator.hasNext() ? rightIterator.next() : null;
+
+
+            if (leftRecord == null || rightRecord == null) {
+                return;
+            }
+
+            try {
+                fetchNextRecord();
+            } catch (NoSuchElementException e) {
+                this.nextRecord = null;
+            }
+
         }
+
+
+
+
+
+
+        private void fetchNextRecord() {
+            if (leftRecord == null) { throw new NoSuchElementException("No new record to fetch"); }
+            this.nextRecord = null;
+
+            Comparator<Record> comp = new LeftRecordComparator();
+
+
+            do {
+                if (!marked) {
+                    while (comp.compare(leftRecord, rightRecord) < 0) {  // left < right
+                        advanceLeft();
+                    }
+                    while (comp.compare(leftRecord, rightRecord) > 0) {  // left > right
+                        advanceRight();
+                    }
+                    marked = true;
+                    rightIterator.markPrev();
+                }
+
+                if (leftRecord == null) {
+                    throw new NoSuchElementException("No new record to fetch");
+                }
+
+
+                if (rightRecord != null && comp.compare(leftRecord, rightRecord) == 0) {   // join left and right
+                    List<DataBox> leftValues = new ArrayList<>(leftRecord.getValues());
+                    List<DataBox> rightValues = new ArrayList<>(rightRecord.getValues());
+                    leftValues.addAll(rightValues);
+                    nextRecord = new Record(leftValues);
+                    advanceRight();
+                } else {
+                    advanceLeft();
+                    rightIterator.reset();
+                    advanceRight();
+                    marked = false;
+                }
+
+
+            } while (!this.hasNext());
+
+        }
+
+
+
+
+
+
+
+
+        // helper:
+        private void advanceLeft() {
+            if (leftIterator.hasNext()) {
+                leftRecord = leftIterator.next();
+            } else {
+                throw new NoSuchElementException("All Done!");
+            }
+        }
+
+        private void advanceRight() {
+            if (rightIterator.hasNext()) {
+                rightRecord = rightIterator.next();
+            } else {
+                rightRecord = null;
+            }
+
+        }
+
+
+
+
+
+
 
         /**
          * Checks if there are more record(s) to yield
@@ -66,10 +168,9 @@ class SortMergeOperator extends JoinOperator {
          * @return true if this iterator has another record to yield, otherwise false
          */
         @Override
-        public boolean hasNext() {
+        public boolean hasNext() {      // same as SNLJ
             // TODO(proj3_part1): implement
-
-            return false;
+            return this.nextRecord != null;
         }
 
         /**
@@ -79,10 +180,19 @@ class SortMergeOperator extends JoinOperator {
          * @throws NoSuchElementException if there are no more Records to yield
          */
         @Override
-        public Record next() {
+        public Record next() {        // same as SNLJ
             // TODO(proj3_part1): implement
+            if (!this.hasNext()) {
+                throw new NoSuchElementException();
+            }
 
-            throw new NoSuchElementException();
+            Record nextRecord = this.nextRecord;
+            try {
+                this.fetchNextRecord();
+            } catch (NoSuchElementException e) {
+                this.nextRecord = null;
+            }
+            return nextRecord;
         }
 
         @Override

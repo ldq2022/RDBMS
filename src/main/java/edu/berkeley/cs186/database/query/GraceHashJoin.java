@@ -65,7 +65,21 @@ public class GraceHashJoin {
         // starting point. Make sure to use the hash function we provide to you
         // by calling hashFunc.apply(databox) to get an integer valued hash code
         // from a DataBox object.
+        while (records.hasNext()) {
+            Record record = records.next();
+            DataBox columnValue = record.getValues().get(columnIndex);
+            int hash = hashFunc.apply(columnValue); // calling hashFunc.apply(databox) to get an integer valued hash code from a DataBox object.
+            int partitionNum = (hash % partitions.length);
+            if (partitionNum < 0) {
+                partitionNum += partitions.length;
+            }
 
+            if (left == true) { // left is the building relation, right is probing
+                partitions[partitionNum].addLeftRecord(record);
+            } else {      // right is the building relation, left is probing
+                partitions[partitionNum].addRightRecord(record);
+            }
+        }
         return;
     }
 
@@ -118,6 +132,34 @@ public class GraceHashJoin {
         // Use the "build" and "probe" variables we set up for you
         // Check out how NaiveHashJoin implements this function if you feel stuck.
 
+        Map<DataBox, List<Record>> hashTable = new HashMap<>();
+
+        while (buildRecords.hasNext()) {   // same as NHJ
+            Record buildRecord = buildRecords.next();
+            DataBox buildJoinValue = buildRecord.getValues().get(buildColumnIndex);
+
+            if (!hashTable.containsKey(buildJoinValue)) {
+                hashTable.put(buildJoinValue, new ArrayList<>());
+            }
+            hashTable.get(buildJoinValue).add(buildRecord);
+        }
+
+        while (probeRecords.hasNext()) {   // same as NHJ
+            Record probeRecord = probeRecords.next();
+            DataBox probeJoinValue = probeRecord.getValues().get(probeColumnIndex);
+
+            if (hashTable.containsKey(probeJoinValue)) {
+                // We have to join the right record with EACH left record that matched the key
+                for (Record lRecord : hashTable.get(probeJoinValue)) {
+                    Record joinedRecord = joinRecords(lRecord, probeRecord, probeFirst);
+                    joinedRecords.add(joinedRecord);
+                }
+            }
+        }
+
+
+
+
         // Return the records
         return joinedRecords;
     }
@@ -160,6 +202,12 @@ public class GraceHashJoin {
             //
             // You may find the ArrayList.addAll method useful here.
             // It may be helpful to read through the HashPartition.java class for methods that will be useful here
+            try {
+                List<Record> listToAppend = this.buildAndProbe(partition);
+                joinedRecords.addAll(listToAppend); // addAll() append the list
+            } catch (IllegalArgumentException e) {
+                joinedRecords.addAll(run(partition.getLeftIterator(), partition.getRightIterator(), pass + 1));
+            }
         }
         return joinedRecords;
     }
@@ -181,8 +229,11 @@ public class GraceHashJoin {
         // TODO(proj3_part1): create an array of partitions
         // You may find the provided helper function
         // createPartition() useful here.
-
-        return null;
+        HashPartition[] result = new HashPartition[this.numBuffers - 1];
+        for (int i = 0; i < this.numBuffers - 1; i++) {
+            result[i] = this.createPartition();
+        }
+        return result;
     }
 
     /**
@@ -295,6 +346,14 @@ public class GraceHashJoin {
 
         // TODO(proj3_part1): populate leftRecords and rightRecords such that NHJ breaks but not GHJ
 
+        int breakpoint = 976 * (6 - 2);
+        for (int i = 0; i < breakpoint + 100; i++) {
+            leftRecords.add(createRecord(10000));
+
+        }
+        for (int j = 0; j < breakpoint; j++) {
+            rightRecords.add(createRecord(10000));
+        }
         return new Pair<>(leftRecords, rightRecords);
     }
 
@@ -319,6 +378,12 @@ public class GraceHashJoin {
         ArrayList<Record> rightRecords = new ArrayList<>();
 
         // TODO(proj3_part1): populate leftRecords and rightRecords such that GHJ breaks
+
+        int breakpoint = 976 * (6 - 2);
+        for (int i = 0; i < breakpoint * 2; i++) {
+            leftRecords.add(createRecord(10000));
+            rightRecords.add(createRecord(10000));
+        }
 
         return new Pair<>(leftRecords, rightRecords);
     }

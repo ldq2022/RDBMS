@@ -137,9 +137,12 @@ public class BPlusTree {
     public Optional<RecordId> get(DataBox key) {
         typecheck(key);
         // TODO(proj2): implement
+        LeafNode leafnode = root.get(key);  // go STRAIGHT to the LeafNode at the bottom of the tree
+        return leafnode.getKey(key);        // help us get the RecordId
+
         // TODO(proj4_part2): B+ tree locking
 
-        return Optional.empty();
+
     }
 
     /**
@@ -190,9 +193,10 @@ public class BPlusTree {
      */
     public Iterator<RecordId> scanAll() {
         // TODO(proj2): Return a BPlusTreeIterator.
+
         // TODO(proj4_part2): B+ tree locking
 
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(root);
     }
 
     /**
@@ -221,9 +225,11 @@ public class BPlusTree {
     public Iterator<RecordId> scanGreaterEqual(DataBox key) {
         typecheck(key);
         // TODO(proj2): Return a BPlusTreeIterator.
+
         // TODO(proj4_part2): B+ tree locking
 
-        return Collections.emptyIterator();
+        return new BPlusTreeIterator(root, key);
+        //return new BPlusTreeIterator(key);
     }
 
     /**
@@ -238,10 +244,39 @@ public class BPlusTree {
     public void put(DataBox key, RecordId rid) {
         typecheck(key);
         // TODO(proj2): implement
+        Optional<Pair<DataBox, Long>> putCase = root.put(key, rid);   // now putCase stores our (middle key, right_node_page_num) if its not empty
+
+        if (putCase.isPresent() == false) {
+            // Optional.empty() is returned. It's case 1!
+            // there is no overflow
+
+            // do nothing, jump to the end and return
+        }
+
+        else {  // case 2 middle key splits
+            // since putCase is not empty, get middle key:
+            DataBox middlekey = putCase.get().getFirst();
+            List<DataBox> newkeys = new ArrayList<>();
+            newkeys.add(middlekey); // the new root will only have one key: the middle key which is pushed up from below
+
+            List<Long> newchildren = new ArrayList<>(); // what is its left child and its right child?
+            newchildren.add(root.getPage().getPageNum()); // ptr to left child, which is our old root
+            newchildren.add(putCase.get().getSecond()); // ptr to right child, which is the node on right_node_page_num (note that pageNum is just the pointer)
+            InnerNode newroot = new InnerNode(this.metadata, this.bufferManager, newkeys, newchildren, this.lockContext);
+
+            // update the current root USING THE GIVEN updateRoot function
+            updateRoot(newroot);
+
+        }
+
+
+
         // TODO(proj4_part2): B+ tree locking
 
         return;
+
     }
+
 
     /**
      * Bulk loads data into the B+ tree. Tree should be empty and the data
@@ -262,10 +297,35 @@ public class BPlusTree {
      */
     public void bulkLoad(Iterator<Pair<DataBox, RecordId>> data, float fillFactor) {
         // TODO(proj2): implement
+
+        if (root.getLeftmostLeaf().getKeys().size() != 0) {
+            throw new BPlusTreeException("Tree is not empty");
+        }
+
+
+        while (data.hasNext()) {
+            Optional<Pair<DataBox, Long>> bulkLoadResult = root.bulkLoad(data, fillFactor);
+            if (bulkLoadResult.isPresent()) { // means there is splitting
+
+                Pair<DataBox, Long> pair = bulkLoadResult.get();
+                List<DataBox> newkeys = new ArrayList<>();
+                List<Long> newchildren = new ArrayList<>();
+                newkeys.add(pair.getFirst());
+                newchildren.add(root.getPage().getPageNum());
+                newchildren.add(pair.getSecond());
+                InnerNode newroot = new InnerNode(metadata, bufferManager, newkeys, newchildren, lockContext);
+                updateRoot(newroot);
+
+            }
+
+        }
+
         // TODO(proj4_part2): B+ tree locking
 
         return;
+
     }
+
 
     /**
      * Deletes a (key, rid) pair from a B+ tree.
@@ -281,6 +341,8 @@ public class BPlusTree {
     public void remove(DataBox key) {
         typecheck(key);
         // TODO(proj2): implement
+        root.remove(key);
+
         // TODO(proj4_part2): B+ tree locking
 
         return;
@@ -386,18 +448,75 @@ public class BPlusTree {
     private class BPlusTreeIterator implements Iterator<RecordId> {
         // TODO(proj2): Add whatever fields and constructors you want here.
 
+        private LeafNode leafnode;   // just keep track of which leafnode we're currenctly in
+        private Iterator<RecordId> iter;
+        //private List<RecordId> rids;  // The recordIDs in the current leafnode (for convenience)
+        //private int currIndex;    // current index in the recordID List
+
+
+        // constructor
+        public BPlusTreeIterator(BPlusNode r) {
+            this.leafnode = r.getLeftmostLeaf();
+            this.iter = this.leafnode.scanAll();
+            //this.rids = leafnode.getRids();
+            //this.currIndex = 0;
+        }
+
+        public BPlusTreeIterator(BPlusNode r, DataBox key) {
+            this.leafnode = r.get(key);
+            this.iter = this.leafnode.scanGreaterEqual(key);
+            //this.rids = leafnode.getRids();
+            //this.currIndex = 0;
+        }
+
+
+
+
+
         @Override
         public boolean hasNext() {
             // TODO(proj2): implement
 
-            return false;
+            // keep iterating through the lists of leafnode until we find a value
+            if (this.iter == null) return false;
+            if (this.iter.hasNext()) return true;
+
+            // if both of the above is not the case, then we move to next node:
+            Optional<LeafNode> nextNode = this.leafnode.getRightSibling();
+            if (!nextNode.isPresent()) {
+                return false; // return false if there is no nextNode: we are at the end of the list of leafnodes!
+            }
+            while (true) {
+                this.leafnode = nextNode.get();
+                this.iter = this.leafnode.scanAll();    // for scanGreaterEqual(), after the reaching the smallest elements, the iteration becomes scanAll()
+                                                        // for example: [1,2,3] [4,5,7] [8,9,11] scanGreaterEqual(3) is equal to scanAll() from the second leafnode
+                if (iter.hasNext()) return true;
+                // if not, move onto the next node
+                nextNode = this.leafnode.getRightSibling();
+                if (!nextNode.isPresent()) return false; // if there is no nextNode, return false
+                // if there is, repeat the while loop
+            }
+
         }
+
 
         @Override
         public RecordId next() {
             // TODO(proj2): implement
 
-            throw new NoSuchElementException();
+            if (!iter.hasNext()) {
+                throw new NoSuchElementException();
+            }
+
+
+            return this.iter.next();
+
+//            if (iter.hasNext()) return iter.next();
+//            else throw new NoSuchElementException();
+
         }
+
+
+
     }
 }

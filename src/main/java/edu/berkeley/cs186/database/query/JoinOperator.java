@@ -14,7 +14,7 @@ import edu.berkeley.cs186.database.table.RecordId;
 import edu.berkeley.cs186.database.table.Schema;
 import edu.berkeley.cs186.database.table.stats.TableStats;
 
-abstract class JoinOperator extends QueryOperator {
+abstract class JoinOperator extends edu.berkeley.cs186.database.query.QueryOperator {
     enum JoinType {
         SNLJ,
         PNLJ,
